@@ -45,6 +45,7 @@ class TestDeploy(absltest.TestCase):
         self.docker_img = "custom-image-tag"
         self.entry_point_args = ["1000"]
         self.stream_logs = False
+        self.service_account = "test_sa@test-project.iam.gserviceaccount.com"
 
         self.expected_request_dict = {
             "jobId": self.mock_job_id,
@@ -53,6 +54,7 @@ class TestDeploy(absltest.TestCase):
                 "scaleTier": "custom",
                 "region": self.region,
                 "args": self.entry_point_args,
+                "serviceAccount": self.service_account,
                 "masterType": "n1-standard-16",
                 "workerType": "n1-standard-8",
                 "workerCount": str(self.worker_count),
@@ -103,6 +105,7 @@ class TestDeploy(absltest.TestCase):
             self.worker_config,
             self.entry_point_args,
             self.stream_logs,
+            service_account=self.service_account
         )
 
         self.assertEqual(job_name, self.mock_job_id)
@@ -154,6 +157,31 @@ class TestDeploy(absltest.TestCase):
             ),
         )
 
+    def test_request_dict_without_service_accont(self):
+        _ = deploy.deploy_job(
+            self.docker_img,
+            self.chief_config,
+            self.worker_count,
+            self.worker_config,
+            self.entry_point_args,
+            self.stream_logs,
+        )
+        build_ret_val = self._mock_discovery_build.return_value
+        proj_ret_val = build_ret_val.projects.return_value
+        jobs_ret_val = proj_ret_val.jobs.return_value
+
+        del self.expected_request_dict["trainingInput"]["serviceAccount"]
+
+        # Verify job creation args
+        _, kwargs = jobs_ret_val.create.call_args
+        self.assertDictEqual(
+            kwargs,
+            {
+                "parent": "projects/" + self.mock_project_name,
+                "body": self.expected_request_dict,
+            },
+        )
+
     def test_request_dict_without_workers(self):
         worker_count = 0
 
@@ -164,6 +192,7 @@ class TestDeploy(absltest.TestCase):
             None,
             self.entry_point_args,
             self.stream_logs,
+            service_account=self.service_account
         )
         build_ret_val = self._mock_discovery_build.return_value
         proj_ret_val = build_ret_val.projects.return_value
@@ -192,6 +221,7 @@ class TestDeploy(absltest.TestCase):
             self.worker_config,
             None,
             self.stream_logs,
+            service_account=self.service_account
         )
         build_ret_val = self._mock_discovery_build.return_value
         proj_ret_val = build_ret_val.projects.return_value
@@ -221,6 +251,7 @@ class TestDeploy(absltest.TestCase):
             worker_config,
             self.entry_point_args,
             self.stream_logs,
+            service_account=self.service_account
         )
         build_ret_val = self._mock_discovery_build.return_value
         proj_ret_val = build_ret_val.projects.return_value

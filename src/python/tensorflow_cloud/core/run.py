@@ -13,10 +13,7 @@
 # limitations under the License.
 """Module that contains the `run` API for scaling Keras/TensorFlow jobs."""
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
+import logging
 import os
 import sys
 
@@ -26,6 +23,9 @@ from . import docker_config as docker_config_module
 from . import machine_config
 from . import preprocess
 from . import validate
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
 
 def remote():
@@ -44,6 +44,8 @@ def run(
     entry_point_args=None,
     stream_logs=False,
     job_labels=None,
+    service_account=None,
+    caip_job_count=0,
     **kwargs
 ):
     """Runs your Tensorflow code in Google Cloud Platform.
@@ -116,14 +118,23 @@ def run(
         job_labels: Dict of str: str. Labels to organize jobs. You can specify
             up to 64 key-value pairs in lowercase letters and numbers, where
             the first character must be lowercase letter. For more details see
-            https://cloud.google.com/ai-platform/training/docs/resource-labels.
+            [resource-labels](
+            https://cloud.google.com/ai-platform/training/docs/resource-labels)
+        service_account: The email address of a user-managed service account
+            to be used for training instead of the service account that AI
+            Platform Training uses by default. see [custom-service-account](
+            https://cloud.google.com/ai-platform/training/docs/custom-service-account)
+        caip_job_count: Number of concurrent jobs to be submitted to AI Platform
+            traniing, note that these are clones of the same job that are
+            executed independantly. This is intended for HP tunning or repeat
+            random seeded jobs.
         **kwargs: Additional keyword arguments.
 
     Returns:
         Dict.
         ```
         {
-          'job_id': training job id,
+          'job_id': list of training job ids,
           'docker_image': Docker image generated for the training job,
         }
         ```
@@ -172,6 +183,7 @@ def run(
     called_from_notebook = _called_from_notebook()
 
     # Run validations.
+    logger.info("Validating environment and input parameters.")
     validate.validate(
         entry_point,
         requirements_txt,
@@ -184,8 +196,10 @@ def run(
         docker_config.image_build_bucket,
         called_from_notebook,
         job_labels=job_labels or {},
+        service_account=service_account,
         docker_parent_image=docker_config.parent_image,
     )
+    logger.info("Validating was successful.")
 
     # Make the `entry_point` cloud and distribution ready.
     # A temporary script called `preprocessed_entry_point` is created.
@@ -207,6 +221,7 @@ def run(
 
     # Create Docker file, generate a tarball, build and push Docker
     # image using the tarball.
+    logger.info("Building and pushing the Docker image.")
     cb_args = (
         entry_point,
         preprocessed_entry_point,
@@ -236,23 +251,30 @@ def run(
         os.close(file_descriptor)
         os.remove(file_path)
 
+    current_job_count = 0
+    job_ids = []
+    logger.info("Deploy job(s) to AI Platfrom Training.")
+    while current_job_count <= caip_job_count:
     # Deploy Docker image on the cloud.
-    job_id = deploy.deploy_job(
-        docker_img_uri,
-        chief_config,
-        worker_count,
-        worker_config,
-        entry_point_args,
-        stream_logs,
-        job_labels=job_labels,
-    )
+        job_id = deploy.deploy_job(
+            docker_img_uri,
+            chief_config,
+            worker_count,
+            worker_config,
+            entry_point_args,
+            stream_logs,
+            job_labels=job_labels,
+            service_account=service_account,
+        )
+        job_ids.append(job_id)
+        current_job_count += 1
 
     # Call `exit` to prevent training the Keras model in the local env.
     # To stop execution after encountering a `run` API call in local env.
     if not remote() and entry_point is None and not called_from_notebook:
         sys.exit(0)
     return {
-        "job_id": job_id,
+        "job_id": job_ids,
         "docker_image": docker_img_uri,
     }
 
